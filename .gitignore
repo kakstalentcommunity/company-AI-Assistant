@@ -1,0 +1,74 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+*.manifest
+*.spec
+
+# ── Virtual environment ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Node / frontend ────────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/out/
+*.tsbuildinfo
+.next/
+
+# ── IDE & editors ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.qodo/
+
+# ── Environment / secrets ─────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+
+# ── Logs & databases ──────────────────────────────────────────────────────
+*.log
+backend/umojafunds.sqlite3
+backend/umojafunds.sqlite3-shm
+backend/umojafunds.sqlite3-wal
+backend/uvicorn*.log
+backend/logs/
+
+# ── Docker ─────────────────────────────────────────────────────────────────
+.docker/
+docker-compose.override.yml
+
+# ── OS files ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.~
+
+# ── Project-specific ─────────────────────────────────────────────────────
+backend/scripts/
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
