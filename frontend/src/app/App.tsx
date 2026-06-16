@@ -1,4 +1,4 @@
-/// <reference types="vite/client" />
+'// <reference types="vite/client" /'
 import React, { useState, useRef, useEffect } from "react";
 import {
   LayoutDashboard, Users, CreditCard, PiggyBank, ArrowLeftRight,
@@ -2475,16 +2475,16 @@ function AdminView() {
 }
 
 const SUGGESTED_PROMPTS = [
-  "Which members are at risk of defaulting?",
-  "Forecast savings inflow for August",
-  "Explain the anomalous transactions flagged this week",
-  "Show me credit score breakdown for the portfolio",
-  "What are the top 3 AI recommendations right now?",
+  "Show me a live portfolio summary",
+  "How many active members do we have?",
+  "List overdue loans with balances",
+  "Find member by phone or ID number",
+  "Show recent credit transactions",
 ];
 
 const INITIAL_MESSAGE: ChatMessage = {
   role: "assistant",
-  content: `Hello, I'm **UmojaAI** - your SACCO intelligence assistant.\n\nI have full context on your loan portfolio, member data, transaction history, and API integrations. I can help you with:\n\n- **Risk analysis** - default predictions, NPL forecasting\n- **Fraud detection** - anomalous transaction explanations\n- **Credit scoring** - member creditworthiness breakdowns\n- **Financial forecasting** - savings and repayment projections\n- **Member insights** - churn risk, retention strategies\n\nAsk me anything about UmojaFunds.`,
+  content: `Hello, I'm **UmojaAI** - your read-only SACCO database assistant.\n\nI can query live UmojaFunds data without writing to the database. Ask me for:\n\n- **Portfolio summaries** - savings, loan exposure, NPL ratio, overdue totals\n- **Member lookups** - by name, member ID, phone, national ID, or account number\n- **Loan records** - active, overdue, pending, completed, or member-specific loans\n- **Transactions** - recent credits, debits, M-Pesa channels, categories, references\n- **External records** - member intelligence, payslips, disbursement dates, biodata, books, attendance, and related tables\n\nTry: "Show me overdue loans" or "Search external member data for 0712345678".`,
   ts: "Just now",
 };
 
@@ -2656,7 +2656,7 @@ function AIAssistantView() {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about members, loans, forecasts, fraud..."
+              placeholder="Ask live DB questions: portfolio, members, loans, transactions..."
               className="flex-1 px-4 py-2.5 text-sm rounded-lg border border-border bg-input-background focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
             <button type="submit" disabled={typing || !input.trim()}

@@ -1,9 +1,10 @@
 import os
+from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from app.config import BACKEND_DIR
+from app.config import BACKEND_DIR, IS_PRODUCTION
 
 DEFAULT_SQLITE_PATH = BACKEND_DIR / "umojafunds.sqlite3"
 
@@ -18,7 +19,7 @@ def _legacy_mysql_url() -> str | None:
     if not all([user, password, host, name]) or password == "YOUR_PASSWORD":
         return None
 
-    return f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{name}"
+    return f"mysql+mysqlconnector://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{name}"
 
 
 DATABASE_URL = (
@@ -26,14 +27,19 @@ DATABASE_URL = (
     or _legacy_mysql_url()
     or f"sqlite:///{DEFAULT_SQLITE_PATH.as_posix()}"
 )
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+AUTO_CREATE_SCHEMA = os.getenv(
+    "AUTO_CREATE_SCHEMA",
+    "true" if IS_SQLITE or not IS_PRODUCTION else "false",
+).strip().lower() in {"1", "true", "yes", "on"}
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False} if IS_SQLITE else {"connection_timeout": int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "5"))}
 engine_options = {
     "connect_args": connect_args,
-    "pool_pre_ping": not DATABASE_URL.startswith("sqlite"),
+    "pool_pre_ping": not IS_SQLITE,
 }
 
-if not DATABASE_URL.startswith("sqlite"):
+if not IS_SQLITE:
     engine_options.update(
         {
             "pool_size": int(os.getenv("DB_POOL_SIZE", "10")),
@@ -45,7 +51,43 @@ if not DATABASE_URL.startswith("sqlite"):
 engine = create_engine(DATABASE_URL, **engine_options)
 
 
-if DATABASE_URL.startswith("sqlite"):
+_AI_READ_ONLY_SQL_PREFIXES = {
+    "SELECT",
+    "WITH",
+    "SHOW",
+    "DESCRIBE",
+    "DESC",
+    "EXPLAIN",
+    "PRAGMA",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+    "SAVEPOINT",
+    "RELEASE",
+}
+
+
+def _install_ai_read_only_guard(target_engine) -> None:
+    if getattr(target_engine, "_umojafunds_ai_read_only_guard", False):
+        return
+
+    @event.listens_for(target_engine, "before_cursor_execute")
+    def _block_ai_write_sql(_conn, _cursor, statement, _parameters, context, _executemany):
+        if not context.execution_options.get("ai_read_only"):
+            return
+
+        sql = statement.lstrip()
+        command = sql.split(None, 1)[0].upper() if sql else ""
+        if command not in _AI_READ_ONLY_SQL_PREFIXES:
+            raise RuntimeError(f"AI assistant database sessions are read-only; blocked SQL command: {command or '<empty>'}")
+
+    target_engine._umojafunds_ai_read_only_guard = True
+
+
+_install_ai_read_only_guard(engine)
+
+
+if IS_SQLITE:
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragmas(dbapi_connection, _connection_record):
         cursor = dbapi_connection.cursor()
@@ -66,10 +108,74 @@ def get_db():
         db.close()
 
 
+def get_ai_read_only_db():
+    db = SessionLocal()
+    connection = None
+    try:
+        connection = db.connection(execution_options={"ai_read_only": True})
+        if connection.dialect.name == "sqlite":
+            db.execute(text("PRAGMA query_only = ON"))
+        yield db
+    finally:
+        try:
+            if connection is not None and connection.dialect.name == "sqlite":
+                db.execute(text("PRAGMA query_only = OFF"))
+            db.rollback()
+        finally:
+            db.close()
+
+
+def verify_db_connection() -> None:
+    global engine, SessionLocal, DATABASE_URL, IS_SQLITE, AUTO_CREATE_SCHEMA
+    
+    if IS_SQLITE:
+        return
+        
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        import logging
+        logger = logging.getLogger("umojafunds.database")
+        logger.warning(
+            "Database connection failed to %s: %s. Falling back to local SQLite database.",
+            DATABASE_URL,
+            e,
+            exc_info=True
+        )
+        
+        DATABASE_URL = f"sqlite:///{DEFAULT_SQLITE_PATH.as_posix()}"
+        IS_SQLITE = True
+        AUTO_CREATE_SCHEMA = True
+        
+        connect_args = {"check_same_thread": False}
+        engine_options = {
+            "connect_args": connect_args,
+            "pool_pre_ping": False,
+        }
+        engine = create_engine(DATABASE_URL, **engine_options)
+        _install_ai_read_only_guard(engine)
+        
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, _connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+            
+        SessionLocal.configure(bind=engine)
+
+
 def init_db() -> None:
+    verify_db_connection()
+    
     from app.models import models  # noqa: F401
     from app.models import security  # noqa: F401
     from app.seed import seed_database
+
+    if not AUTO_CREATE_SCHEMA:
+        return
 
     Base.metadata.create_all(bind=engine)
     _sync_lightweight_schema()
@@ -92,7 +198,7 @@ def _sync_lightweight_schema() -> None:
             return {column["name"] for column in inspector.get_columns(table)}
 
         def add_column(table: str, column: str, sqlite_type: str, mysql_type: str | None = None) -> None:
-            column_type = sqlite_type if DATABASE_URL.startswith("sqlite") else (mysql_type or sqlite_type)
+            column_type = sqlite_type if IS_SQLITE else (mysql_type or sqlite_type)
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"))
 
         def ensure_index(table: str, index_name: str, column_sql: str, unique: bool = False) -> None:
@@ -110,7 +216,7 @@ def _sync_lightweight_schema() -> None:
         if "auth_tokens" in table_names:
             token_columns = columns("auth_tokens")
             if "last_seen_at" not in token_columns:
-                if DATABASE_URL.startswith("sqlite"):
+                if IS_SQLITE:
                     connection.execute(text("ALTER TABLE auth_tokens ADD COLUMN last_seen_at DATETIME"))
                     connection.execute(text("UPDATE auth_tokens SET last_seen_at = created_at WHERE last_seen_at IS NULL"))
                 else:
@@ -205,7 +311,7 @@ def _sync_lightweight_schema() -> None:
                     add_column("security_events", column, column_type)
 
         for table in table_names:
-            if table == "members" and "user_id" in columns(table) and DATABASE_URL.startswith("sqlite"):
+            if table == "members" and "user_id" in columns(table) and IS_SQLITE:
                 existing_indexes = {index["name"] for index in inspector.get_indexes(table)}
                 if "ix_members_user_id" not in existing_indexes:
                     connection.execute(text("CREATE UNIQUE INDEX ix_members_user_id ON members(user_id) WHERE user_id IS NOT NULL"))
@@ -228,7 +334,7 @@ def _sync_lightweight_schema() -> None:
             ensure_index("mpesa_payments", "ix_mpesa_payments_checkout_request_id", "checkout_request_id")
             ensure_index("mpesa_payments", "ix_mpesa_payments_bill_ref_number", "bill_ref_number")
         if "rate_limit_events" in table_names:
-            ensure_index("rate_limit_events", "ix_rate_limit_events_key_created", "`key`, created_at" if not DATABASE_URL.startswith("sqlite") else "key, created_at")
+            ensure_index("rate_limit_events", "ix_rate_limit_events_key_created", "`key`, created_at" if not IS_SQLITE else "key, created_at")
         if "security_events" in table_names:
             ensure_index("security_events", "ix_security_events_severity_created", "severity, created_at")
             ensure_index("security_events", "ix_security_events_type_created", "event_type, created_at")

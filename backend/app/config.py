@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BACKEND_DIR / ".env")
+load_dotenv(BACKEND_DIR / ".env", override=True)
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -53,6 +53,9 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "no-reply@umojafunds.local")
 SMTP_USE_TLS = _bool_env("SMTP_USE_TLS", True)
 
 ALLOW_PUBLIC_SIGNUP = _bool_env("ALLOW_PUBLIC_SIGNUP", False)
+ENV_ADMIN_LOGIN_ENABLED = _bool_env("ENV_ADMIN_LOGIN_ENABLED", False)
+ENV_ADMIN_EMAIL = os.getenv("ENV_ADMIN_EMAIL", "").strip().lower()
+ENV_ADMIN_PASSWORD = os.getenv("ENV_ADMIN_PASSWORD", "")
 SESSION_HOURS = _int_env("SESSION_HOURS", 12)
 SESSION_IDLE_MINUTES = _int_env("SESSION_IDLE_MINUTES", 30)
 PASSWORD_RESET_MINUTES = _int_env("PASSWORD_RESET_MINUTES", 30)
@@ -121,6 +124,9 @@ if IS_PRODUCTION and os.getenv("DB_USER", "").strip().lower() == "root":
 
 if IS_PRODUCTION and os.getenv("DB_PASSWORD", "") in {"", "123456", "password", "admin", "YOUR_PASSWORD"}:
     raise RuntimeError("Production database password is missing or too weak.")
+
+if IS_PRODUCTION and ENV_ADMIN_LOGIN_ENABLED:
+    raise RuntimeError("ENV_ADMIN_LOGIN_ENABLED cannot be used in production.")
 
 if IS_PRODUCTION and not SMTP_HOST:
     raise RuntimeError("SMTP_HOST must be configured in production for password reset delivery.")

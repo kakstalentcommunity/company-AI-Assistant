@@ -20,6 +20,7 @@ from app.security import (
     bearer_scheme,
     clear_login_failures,
     create_access_token,
+    create_env_admin_token,
     create_password_reset_token,
     enforce_auth_rate_limit,
     hash_password,
@@ -29,6 +30,7 @@ from app.security import (
     require_user,
     reset_user_password,
     serialize_user,
+    user_from_env_admin_token,
     verify_password,
 )
 from app.security.severity import Severity
@@ -140,11 +142,18 @@ def signup(
 def login(
     payload: LoginRequest,
     request_: Request,
-    _: None = Depends(enforce_auth_rate_limit),
     db: Session = Depends(get_db),
 ):
     email = payload.email.strip().lower()
     assert_login_allowed(email)
+
+    env_admin_token = create_env_admin_token(email, payload.password)
+    if env_admin_token:
+        clear_login_failures(email)
+        env_admin = user_from_env_admin_token(env_admin_token)
+        return {"token": env_admin_token, "user": serialize_user(env_admin)}
+
+    enforce_auth_rate_limit(request_, db)
 
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(payload.password, user.password_hash):

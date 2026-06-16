@@ -26,6 +26,7 @@ from app.routes import ai_scoring
 from app.routes import applications
 from app.routes import product_analytics
 from app.routes import ai_proxy
+from app.routes import ai_query
 from app.routes import security_events
 
 
@@ -88,15 +89,25 @@ app.include_router(applications.admin_router)
 app.include_router(product_analytics.router)
 app.include_router(product_analytics.admin_router)
 app.include_router(ai_proxy.router)
+app.include_router(ai_query.router)
 app.include_router(security_events.router)
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled API error on %s %s", request.method, request.url.path)
+    origin = request.headers.get("origin")
+    headers = {}
+    if origin:
+        if "*" in CORS_ORIGINS or origin in CORS_ORIGINS:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+            headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+            headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept"
     return JSONResponse(
         status_code=500,
         content={"detail": "Something went wrong. Please try again later."},
+        headers=headers,
     )
 
 

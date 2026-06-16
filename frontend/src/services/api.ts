@@ -155,6 +155,36 @@ export interface SaccoData {
   anomalyFlags: Record<string, AnomalyFlag>;
 }
 
+export interface MemberIntelligenceLoan {
+  summary: Record<string, Record<string, unknown>>;
+  allFields: Record<string, unknown>;
+}
+
+export interface MemberIntelligence {
+  sourceTables: {
+    member: string;
+    loans: string;
+  };
+  tableMetadata?: {
+    member: {
+      columnCount: number;
+      searchableColumns: string[];
+    };
+    loans: {
+      columnCount: number;
+      searchableColumns: string[];
+    };
+  };
+  query: string;
+  matchSource?: "member" | "loan" | string;
+  member: {
+    summary: Record<string, Record<string, unknown>>;
+    allFields: Record<string, unknown>;
+  };
+  loans: MemberIntelligenceLoan[];
+  loanCount: number;
+}
+
 export interface AuthUser {
   id: number;
   name: string;
@@ -381,9 +411,13 @@ export const EMPTY_SACCO_DATA: SaccoData = {
   anomalyFlags: {},
 };
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:8001" : "")).replace(/\/$/, "");
 const SESSION_KEY = "umojafunds_session";
 const SESSION_IDLE_MS = 30 * 60 * 1000;
+
+export function apiUrl(path: string): string {
+  return `${API_BASE_URL}${path}`;
+}
 
 interface StoredSession {
   session: AuthSession;
@@ -421,7 +455,7 @@ export function clearSession(): void {
 }
 
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...options,
     headers: {
       Accept: "application/json",
@@ -470,6 +504,14 @@ export function signup(name: string, email: string, password: string): Promise<A
     method: "POST",
     body: JSON.stringify({ name, email, password }),
   });
+}
+
+export function fetchMemberIntelligence(token: string, query: string): Promise<MemberIntelligence> {
+  return request<MemberIntelligence>(
+    `/api/member-intelligence?q=${encodeURIComponent(query)}`,
+    {},
+    token,
+  );
 }
 
 export function requestPasswordReset(email: string): Promise<PasswordResetRequestResult> {
@@ -643,5 +685,21 @@ export function trackProductAnalyticsEvent(token: string, payload: ProductAnalyt
   return request<{ id: number }>("/api/analytics/events", {
     method: "POST",
     body: JSON.stringify(payload),
+  }, token);
+}
+
+export interface AiChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AiChatResult {
+  content: string;
+}
+
+export function aiChat(token: string, message: string, conversationHistory: AiChatMessage[] = []): Promise<AiChatResult> {
+  return request<AiChatResult>("/api/ai-query/chat", {
+    method: "POST",
+    body: JSON.stringify({ message, conversation_history: conversationHistory }),
   }, token);
 }

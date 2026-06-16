@@ -1,5 +1,7 @@
 import hashlib
 import hmac
+import base64
+import json
 import logging
 import secrets
 from collections import defaultdict, deque
@@ -15,6 +17,9 @@ from sqlalchemy.orm import Session
 from app.config import (
     AUTH_RATE_LIMIT_ATTEMPTS,
     AUTH_RATE_LIMIT_WINDOW_SECONDS,
+    ENV_ADMIN_EMAIL,
+    ENV_ADMIN_LOGIN_ENABLED,
+    ENV_ADMIN_PASSWORD,
     PASSWORD_RESET_MINUTES,
     SESSION_HOURS,
     SESSION_IDLE_MINUTES,
@@ -77,6 +82,76 @@ def serialize_user(user: User) -> dict:
         "isActive": user.is_active,
         "createdAt": user.created_at.isoformat(),
     }
+
+
+def _env_admin_enabled() -> bool:
+    return ENV_ADMIN_LOGIN_ENABLED and bool(ENV_ADMIN_EMAIL) and bool(ENV_ADMIN_PASSWORD)
+
+
+def _env_admin_user() -> User:
+    return User(
+        id=0,
+        name="Environment Admin",
+        email=ENV_ADMIN_EMAIL,
+        password_hash="",
+        role="admin",
+        is_active=True,
+        created_at=datetime.utcnow(),
+    )
+
+
+def _env_admin_secret() -> bytes:
+    return hashlib.sha256(f"{ENV_ADMIN_EMAIL}:{ENV_ADMIN_PASSWORD}".encode("utf-8")).digest()
+
+
+def _urlsafe_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _urlsafe_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(f"{data}{padding}".encode("ascii"))
+
+
+def create_env_admin_token(email: str, password: str) -> str | None:
+    if not _env_admin_enabled():
+        return None
+    if email.strip().lower() != ENV_ADMIN_EMAIL:
+        return None
+    if not hmac.compare_digest(password, ENV_ADMIN_PASSWORD):
+        return None
+
+    payload = {
+        "sub": ENV_ADMIN_EMAIL,
+        "role": "admin",
+        "exp": int((datetime.utcnow() + timedelta(hours=SESSION_HOURS)).timestamp()),
+    }
+    payload_text = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_part = _urlsafe_encode(payload_text)
+    signature = hmac.new(_env_admin_secret(), payload_part.encode("ascii"), hashlib.sha256).digest()
+    return f"envadmin.{payload_part}.{_urlsafe_encode(signature)}"
+
+
+def user_from_env_admin_token(raw_token: str) -> User | None:
+    if not _env_admin_enabled() or not raw_token.startswith("envadmin."):
+        return None
+
+    try:
+        _, payload_part, signature_part = raw_token.split(".", 2)
+        expected = hmac.new(_env_admin_secret(), payload_part.encode("ascii"), hashlib.sha256).digest()
+        supplied = _urlsafe_decode(signature_part)
+        if not hmac.compare_digest(expected, supplied):
+            return None
+        payload = json.loads(_urlsafe_decode(payload_part).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+    if payload.get("sub") != ENV_ADMIN_EMAIL or payload.get("role") != "admin":
+        return None
+    if int(payload.get("exp", 0)) < int(datetime.utcnow().timestamp()):
+        return None
+
+    return _env_admin_user()
 
 
 def create_access_token(db: Session, user: User) -> str:
@@ -189,6 +264,10 @@ def require_user(
 ) -> User:
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    env_admin = user_from_env_admin_token(credentials.credentials)
+    if env_admin:
+        return env_admin
 
     token = db.query(AuthToken).filter(AuthToken.token_hash == hash_token(credentials.credentials)).first()
     now = datetime.utcnow()
